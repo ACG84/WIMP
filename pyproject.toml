@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wimp"
+version = "0.1.0"
+description = "Worm IMage Processor - Time-domain NV magnetometry signal processing for C. elegans neural imaging"
+license = "Unlicense"
+requires-python = ">=3.10"
+authors = [
+    { name = "iGEM 2026 Team UIUC" },
+]
+keywords = ["NV center", "magnetometry", "NMR", "C. elegans", "neural imaging", "time-domain"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "matplotlib>=3.7",
+    "pandas>=2.0",
+    "h5py>=3.8",
+]
+
+[project.scripts]
+wimp = "wimp.cli:main"
+
+[project.optional-dependencies]
+tracking = ["trackpy>=0.6"]
+interactive = ["napari>=0.4.18", "jupyter>=1.0", "ipywidgets>=8.0"]
+zarr = ["zarr>=2.14"]
+wavelet = ["PyWavelets>=1.4"]
+nwb = ["pynwb>=2.5"]
+graph = ["networkx>=3.0"]
+dashboard = ["panel>=1.0", "holoviews>=1.16"]
+all = ["wimp[tracking,interactive,zarr,wavelet,nwb,graph,dashboard]"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wimp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
