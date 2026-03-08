@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from wimp.constants import GAMMA_NV
+from wimp.constants import GAMMA_NV, D0
 from wimp.relaxation import (
     ramsey_model,
     t2_decay_model,
@@ -17,6 +17,11 @@ from wimp.relaxation import (
     extract_field_ramsey,
     extract_field_echo,
     _initial_frequency_guess,
+    lorentzian_dip,
+    odmr_model,
+    odmr_single_dip_model,
+    fit_odmr,
+    extract_field_odmr,
 )
 
 
@@ -336,3 +341,115 @@ class TestFitRamseyJoint:
         signals = data["signal"][np.newaxis, :]
         result = fit_ramsey_joint(tau, signals)
         assert result["n_nds"] == 1
+
+
+# ---------------------------------------------------------------------------
+# ODMR models and fitting
+# ---------------------------------------------------------------------------
+
+
+class TestLorentzianDip:
+    def test_dip_at_center(self):
+        freq = np.array([1e9])
+        val = lorentzian_dip(freq, 1e9, 0.05, 5e6)
+        # At center the dip value should equal -amplitude
+        assert val[0] == pytest.approx(-0.05, abs=1e-6)
+
+    def test_zero_away_from_center(self):
+        freq = np.array([2e9])  # far from center at 1 GHz
+        val = lorentzian_dip(freq, 1e9, 0.05, 5e6)
+        assert abs(val[0]) < 1e-5
+
+    def test_positive_amplitude(self):
+        freq = np.linspace(0.99e9, 1.01e9, 100)
+        vals = lorentzian_dip(freq, 1e9, 0.05, 5e6)
+        # All values should be non-positive (dip goes down)
+        assert np.all(vals <= 0)
+
+
+class TestODMRModel:
+    def test_symmetric_double_dip(self):
+        freq = np.linspace(2.8e9, 2.94e9, 500)
+        signal = odmr_model(freq, 1.0, 2.85e9, 2.89e9, 0.03, 0.03, 5e6, 5e6)
+        # Baseline is 1.0, dips go below 1.0
+        assert signal.min() < 1.0
+        assert signal[0] == pytest.approx(1.0, abs=0.01)
+
+    def test_single_dip_at_d0(self):
+        freq = np.linspace(2.86e9, 2.88e9, 200)
+        signal = odmr_single_dip_model(freq, 1.0, D0, 0.03, 5e6)
+        # At D0 the signal should be at its minimum
+        idx_d0 = np.argmin(np.abs(freq - D0))
+        assert signal[idx_d0] < 0.98
+
+
+class TestFitODMR:
+    def test_double_dip_recovers_field(self):
+        """Fit a synthetic double-dip ODMR and recover B to ~5%."""
+        b_true = 1e-3  # 1 mT
+        f_minus = D0 - GAMMA_NV * b_true
+        f_plus = D0 + GAMMA_NV * b_true
+        freq = np.linspace(2.78e9, 2.96e9, 500)
+        signal = odmr_model(freq, 1.0, f_minus, f_plus, 0.03, 0.03, 5e6, 5e6)
+        rng = np.random.default_rng(42)
+        signal += rng.normal(0, 0.001, signal.shape)
+
+        result = fit_odmr(freq, signal)
+        assert result["n_dips"] == 2
+        assert result["b_field"] == pytest.approx(b_true, rel=0.05)
+
+    def test_single_dip_zero_field(self):
+        """Fit a single-dip ODMR (near zero field)."""
+        freq = np.linspace(2.86e9, 2.88e9, 300)
+        signal = odmr_single_dip_model(freq, 1.0, D0, 0.03, 5e6)
+        rng = np.random.default_rng(43)
+        signal += rng.normal(0, 0.001, signal.shape)
+
+        result = fit_odmr(freq, signal)
+        assert result["n_dips"] == 1
+        assert result["b_field"] == pytest.approx(0.0, abs=1e-4)
+
+    def test_auto_detect_n_dips(self):
+        """Auto-detection should find 2 dips for separated peaks."""
+        b = 1e-3
+        f_minus = D0 - GAMMA_NV * b
+        f_plus = D0 + GAMMA_NV * b
+        freq = np.linspace(2.78e9, 2.96e9, 500)
+        signal = odmr_model(freq, 1.0, f_minus, f_plus, 0.03, 0.03, 5e6, 5e6)
+
+        result = fit_odmr(freq, signal)
+        assert result["n_dips"] == 2
+
+    def test_returns_contrast_and_cov(self):
+        freq = np.linspace(2.86e9, 2.88e9, 300)
+        signal = odmr_single_dip_model(freq, 1.0, D0, 0.03, 5e6)
+        result = fit_odmr(freq, signal)
+        assert "contrast" in result
+        assert result["contrast"] > 0
+        assert "cov" in result
+
+    def test_explicit_n_dips_override(self):
+        """Force single dip on a single-dip spectrum."""
+        freq = np.linspace(2.86e9, 2.88e9, 300)
+        signal = odmr_single_dip_model(freq, 1.0, D0, 0.03, 5e6)
+        result = fit_odmr(freq, signal, n_dips=1)
+        assert result["n_dips"] == 1
+
+
+class TestExtractFieldODMR:
+    def test_double_dip(self):
+        fit = {
+            "n_dips": 2,
+            "splitting": 2 * GAMMA_NV * 1e-3,
+        }
+        b = extract_field_odmr(fit)
+        assert b == pytest.approx(1e-3, rel=1e-6)
+
+    def test_single_dip(self):
+        fit = {
+            "n_dips": 1,
+            "center": D0,
+        }
+        b = extract_field_odmr(fit)
+        assert b == pytest.approx(0.0, abs=1e-10)
+

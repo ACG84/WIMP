@@ -6,6 +6,7 @@ import pytest
 from wimp.constants import D0, D0_TEMP_COEFF, GAMMA_NV
 from wimp.calibration import (
     characterize_nv,
+    characterize_nv_cw,
     calibrate_with_known_field,
     temperature_correction,
     correct_field_for_temperature,
@@ -180,18 +181,53 @@ class TestTemperatureSeriesCorrection:
 
 class TestEstimateTemperatureFromRamsey:
     def test_no_shift_at_d0(self):
-        # If frequency == D0 and B == 0, delta_T should be 0
-        delta_T = estimate_temperature_from_ramsey(D0, b_known=0.0)
+        # If oscillation frequency == 0 and B == 0, delta_T should be 0
+        delta_T = estimate_temperature_from_ramsey(0.0, b_known=0.0)
         assert delta_T == pytest.approx(0.0, abs=1e-6)
 
     def test_known_shift(self):
-        # Apply a 10 K shift: freq = D0 + D0_TEMP_COEFF * 10
-        freq = D0 + D0_TEMP_COEFF * 10
+        # Apply a 10 K shift: oscillation freq = D0_TEMP_COEFF * 10
+        freq = D0_TEMP_COEFF * 10
         delta_T = estimate_temperature_from_ramsey(freq, b_known=0.0)
         assert delta_T == pytest.approx(10.0, rel=0.01)
 
     def test_with_known_field(self):
         b = 1e-6  # 1 uT field
-        freq = D0 + GAMMA_NV * b  # no temp shift, just field
+        freq = GAMMA_NV * b  # no temp shift, just Zeeman contribution
         delta_T = estimate_temperature_from_ramsey(freq, b_known=b)
         assert delta_T == pytest.approx(0.0, abs=1e-6)
+
+
+class TestCharacterizeNVCW:
+    def test_returns_expected_keys(self):
+        from wimp.relaxation import odmr_model
+
+        b = 0.5e-3
+        f_minus = D0 - GAMMA_NV * b
+        f_plus = D0 + GAMMA_NV * b
+        freq = np.linspace(2.8e9, 2.94e9, 500)
+        signal = odmr_model(freq, 1.0, f_minus, f_plus, 0.03, 0.03, 5e6, 5e6)
+        rng = np.random.default_rng(55)
+        signal += rng.normal(0, 0.001, signal.shape)
+
+        result = characterize_nv_cw(freq, signal)
+        for key in ("fit", "linewidth", "contrast", "t2star_estimated",
+                     "b_field", "cw_sensitivity", "center_freq", "temperature_shift"):
+            assert key in result
+
+    def test_sensitivity_positive(self):
+        from wimp.relaxation import odmr_model
+
+        b = 0.5e-3
+        f_minus = D0 - GAMMA_NV * b
+        f_plus = D0 + GAMMA_NV * b
+        freq = np.linspace(2.8e9, 2.94e9, 500)
+        signal = odmr_model(freq, 1.0, f_minus, f_plus, 0.03, 0.03, 5e6, 5e6)
+        rng = np.random.default_rng(56)
+        signal += rng.normal(0, 0.001, signal.shape)
+
+        result = characterize_nv_cw(freq, signal)
+        assert result["cw_sensitivity"] > 0
+        assert result["linewidth"] > 0
+        assert result["contrast"] > 0
+

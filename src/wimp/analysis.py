@@ -54,8 +54,16 @@ def noise_spectroscopy(
     result : dict
         ``freq`` (Hz), ``spectral_density`` (T²/Hz).
     """
+    if n_pulses < 1:
+        raise ValueError("n_pulses must be >= 1")
+
     tau = np.asarray(tau_array, dtype=float)
     coh = np.asarray(coherence_vs_tau, dtype=float) / amplitude
+
+    # Filter out tau <= 0 entries to avoid division by zero
+    valid = tau > 0
+    tau = tau[valid]
+    coh = coh[valid]
 
     # Clip to avoid log(0)
     coh = np.clip(coh, 1e-10, 1.0)

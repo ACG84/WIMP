@@ -14,7 +14,7 @@ from numpy.typing import NDArray
 from scipy.stats import linregress
 
 from wimp.constants import D0, D0_TEMP_COEFF, GAMMA_NV
-from wimp.relaxation import fit_ramsey, fit_t2_decay, fit_t1_recovery
+from wimp.relaxation import fit_ramsey, fit_t2_decay, fit_t1_recovery, fit_odmr
 
 # ---------------------------------------------------------------------------
 # Full NV characterisation
@@ -76,6 +76,74 @@ def characterize_nv(
         "t1_fit": t1_fit,
         "dc_sensitivity": eta_dc,
         "ac_sensitivity": eta_ac,
+    }
+
+
+def characterize_nv_cw(
+    freq: NDArray,
+    signal: NDArray,
+    *,
+    readout_rate: float = 1e5,
+) -> dict[str, Any]:
+    """Characterise an NV centre from a CW ODMR spectrum.
+
+    Fits the ODMR spectrum, extracts linewidth, contrast, estimates
+    T₂*, derives CW sensitivity, and estimates temperature shift.
+
+    Parameters
+    ----------
+    freq : ndarray
+        Frequency sweep (Hz).
+    signal : ndarray
+        ODMR signal.
+    readout_rate : float
+        Photon detection rate (Hz).
+
+    Returns
+    -------
+    result : dict
+        ``fit``, ``linewidth``, ``contrast``, ``t2star_estimated``,
+        ``b_field``, ``cw_sensitivity``, ``center_freq``,
+        ``temperature_shift``.
+    """
+    import math
+    from wimp.sensitivity import cw_sensitivity
+    from wimp.relaxation import extract_field_odmr
+
+    fit = fit_odmr(freq, signal)
+
+    # Extract linewidth and contrast from fit
+    n_dips = fit.get("n_dips", 1)
+    if n_dips == 2:
+        linewidth = (fit["gamma_minus"] + fit["gamma_plus"]) / 2.0
+        contrast = (fit["a_minus"] + fit["a_plus"]) / (2.0 * fit["baseline"])
+        center_freq = (fit["f_minus"] + fit["f_plus"]) / 2.0
+    else:
+        linewidth = fit["linewidth"]
+        contrast = fit["amplitude"] / fit["baseline"]
+        center_freq = fit["center"]
+
+    # Estimate T2* from linewidth: T2* ≈ 1 / (π Δf)
+    t2star_est = 1.0 / (math.pi * linewidth) if linewidth > 0 else float("inf")
+
+    # B-field
+    b_field = extract_field_odmr(fit)
+
+    # CW sensitivity
+    eta = cw_sensitivity(contrast, linewidth, readout_rate)
+
+    # Temperature shift from center frequency vs D0
+    temp_shift = temperature_correction(center_freq)
+
+    return {
+        "fit": fit,
+        "linewidth": linewidth,
+        "contrast": contrast,
+        "t2star_estimated": t2star_est,
+        "b_field": b_field,
+        "cw_sensitivity": eta,
+        "center_freq": center_freq,
+        "temperature_shift": temp_shift,
     }
 
 
@@ -345,7 +413,9 @@ def estimate_temperature_from_ramsey(
     delta_T : float
         Temperature change from reference (Kelvin).
     """
-    # Ramsey frequency ≈ |D0 + dD0/dT * dT ± gamma * B|
-    # Rearrange: dT = (f - gamma * B - D0) / (dD0/dT)
-    delta_d0 = frequency - GAMMA_NV * abs(b_known) - D0
+    # The Ramsey *oscillation* frequency is the detuning from the
+    # microwave drive (set near D0), so it equals:
+    #     f_osc ≈ |dD0/dT * dT ± gamma * B|
+    # Rearrange: dD0 = f_osc - gamma * |B|, then dT = dD0 / (dD0/dT)
+    delta_d0 = frequency - GAMMA_NV * abs(b_known)
     return delta_d0 / D0_TEMP_COEFF

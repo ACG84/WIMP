@@ -12,6 +12,9 @@ from wimp.sensitivity import (
     shot_noise_limit,
     compare_protocols,
     optimal_protocol,
+    cw_sensitivity,
+    sensitivity_vs_tau,
+    measurement_time_for_target,
 )
 
 
@@ -72,13 +75,13 @@ class TestShotNoiseLimit:
 class TestCompareProtocols:
     def test_returns_dataframe(self):
         df = compare_protocols()
-        assert len(df) == 4
+        assert len(df) == 5
         assert "protocol" in df.columns
         assert "sensitivity_T_sqrtHz" in df.columns
 
     def test_custom_parameters(self):
         df = compare_protocols(contrast=0.1, t2star=2e-6, t2=200e-6)
-        assert len(df) == 4
+        assert len(df) == 5
 
 
 class TestOptimalProtocol:
@@ -217,3 +220,39 @@ class TestMeasurementTimeForTarget:
     def test_unknown_raises(self):
         with pytest.raises(ValueError, match="Unknown protocol"):
             measurement_time_for_target(1e-9, "nonexistent")
+
+
+class TestCWSensitivity:
+    def test_positive(self):
+        eta = cw_sensitivity(0.03, 5e6, 1e5)
+        assert eta > 0
+
+    def test_improves_with_narrower_linewidth(self):
+        eta_wide = cw_sensitivity(0.03, 10e6, 1e5)
+        eta_narrow = cw_sensitivity(0.03, 2e6, 1e5)
+        assert eta_narrow < eta_wide
+
+    def test_improves_with_higher_contrast(self):
+        eta_low = cw_sensitivity(0.01, 5e6, 1e5)
+        eta_high = cw_sensitivity(0.1, 5e6, 1e5)
+        assert eta_high < eta_low
+
+    def test_compare_protocols_includes_cw(self):
+        df = compare_protocols()
+        protocols = df["protocol"].tolist()
+        assert any("CW" in p for p in protocols)
+
+    def test_optimal_protocol_cw_odmr(self):
+        result = optimal_protocol("cw_odmr")
+        assert result["protocol"] == "cw_odmr"
+        assert result["sensitivity_T_sqrtHz"] > 0
+
+    def test_sensitivity_vs_tau_cw_odmr_raises(self):
+        tau = np.linspace(0.1e-6, 5e-6, 10)
+        with pytest.raises(ValueError, match="CW ODMR"):
+            sensitivity_vs_tau("cw_odmr", tau)
+
+    def test_measurement_time_cw_odmr(self):
+        t = measurement_time_for_target(1e-9, "cw_odmr")
+        assert t > 0
+

@@ -25,6 +25,8 @@ from wimp.relaxation import (
     extract_field_ramsey,
     fit_ramsey_bayesian,
     fit_ramsey_joint,
+    fit_odmr,
+    extract_field_odmr,
 )
 from wimp.io import WIMPDataset, save_hdf5, load_hdf5, save_zarr, load_zarr
 from wimp.zarr_stream import ZarrStreamWriter, ZarrStreamReader

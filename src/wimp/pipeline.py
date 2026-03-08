@@ -18,7 +18,7 @@ from numpy.typing import NDArray
 
 from wimp.constants import GAMMA_NV
 from wimp.io import WIMPDataset, load_hdf5, load_numpy, save_hdf5, export_results
-from wimp.relaxation import fit_ramsey, fit_t2_decay, fit_t1_recovery
+from wimp.relaxation import fit_ramsey, fit_t2_decay, fit_t1_recovery, fit_odmr
 from wimp.source import (
     lead_field_matrix, mne_inverse, resolution_matrix, crosstalk_metrics,
     time_varying_inverse,
@@ -84,12 +84,14 @@ def default_config(protocol: str = "ramsey") -> PipelineConfig:
         return PipelineConfig(protocol="t1", tau_range=(0, 20e-3))
     if protocol == "dd":
         return PipelineConfig(protocol="dd", tau_range=(1e-7, 1e-4))
+    if protocol == "cw_odmr":
+        return PipelineConfig(protocol="cw_odmr", tau_range=(2.8e9, 2.94e9))
     raise ValueError(f"Unknown protocol: {protocol!r}")
 
 
 def validate_config(config: PipelineConfig) -> None:
     """Raise ``ValueError`` if the configuration is inconsistent."""
-    valid_protocols = {"ramsey", "echo", "hahn_echo", "t1", "dd"}
+    valid_protocols = {"ramsey", "echo", "hahn_echo", "t1", "dd", "cw_odmr"}
     if config.protocol not in valid_protocols:
         raise ValueError(
             f"protocol must be one of {valid_protocols}, got {config.protocol!r}"
@@ -121,6 +123,8 @@ def _fit_single_nd(
     if protocol == "dd":
         # DD sweep doesn't use standard relaxation fit; return raw
         return {"tau": tau, "signal": signal}
+    if protocol == "cw_odmr":
+        return fit_odmr(tau, signal, **fitting_params)
     raise ValueError(f"Unknown protocol for fitting: {protocol!r}")
 
 
@@ -199,6 +203,11 @@ def run_pipeline(
                     field_ts[i, t_idx] = r.get("b_field", 0.0)
         else:
             field_ts = np.array([f.get("b_field", 0.0) for f in fits]).reshape(n_nds, 1)
+    elif config.protocol == "cw_odmr":
+        from wimp.relaxation import extract_field_odmr
+        field_ts = np.array([
+            extract_field_odmr(f) for f in fits
+        ]).reshape(n_nds, 1)
 
     # 4. Deformable registration (if requested)
     deformable_result = None

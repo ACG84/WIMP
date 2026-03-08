@@ -23,6 +23,9 @@ D0_TEMP_COEFF: float = -74e-6 * 1e9
 G_NV: float = 2.0028
 """Electron g-factor for the NV ground state."""
 
+A_N: float = 2.16e6
+"""Nitrogen-14 hyperfine splitting (Hz)."""
+
 # ---------------------------------------------------------------------------
 # Fundamental constants
 # ---------------------------------------------------------------------------

@@ -11,9 +11,9 @@ from typing import Any, Callable
 import numpy as np
 from numpy.typing import NDArray
 
-from wimp.constants import GAMMA_NV, MU0, CANONICAL_BODY_LENGTH
+from wimp.constants import GAMMA_NV, MU0, CANONICAL_BODY_LENGTH, D0
 from wimp.pulses import PulseSequence, ramsey_sequence, hahn_echo_sequence, cpmg_sequence
-from wimp.relaxation import ramsey_model, t2_decay_model, t1_recovery_model
+from wimp.relaxation import ramsey_model, t2_decay_model, t1_recovery_model, odmr_model, odmr_single_dip_model
 
 # ---------------------------------------------------------------------------
 # Single-curve generators
@@ -198,6 +198,82 @@ def generate_dd_sweep(
             "amplitude": amplitude,
             "t2": t2,
         },
+    }
+
+
+def generate_odmr_spectrum(
+    freq_array: NDArray,
+    b_field: float,
+    linewidth: float = 5e6,
+    contrast: float = 0.03,
+    snr: float = 50.0,
+    *,
+    baseline: float = 1.0,
+    asymmetry: float = 0.0,
+    seed: int | None = None,
+) -> dict[str, Any]:
+    """Generate a synthetic CW ODMR spectrum.
+
+    Parameters
+    ----------
+    freq_array : ndarray
+        Microwave frequency sweep (Hz), typically around ``D0``.
+    b_field : float
+        Applied DC magnetic field (Tesla).
+    linewidth : float
+        FWHM of each Lorentzian dip (Hz).
+    contrast : float
+        Fractional dip depth (0, 1].
+    snr : float
+        Signal-to-noise ratio.
+    baseline : float
+        Off-resonance PL level.
+    asymmetry : float
+        Fractional amplitude difference between dips (0 = symmetric).
+    seed : int, optional
+        RNG seed.
+
+    Returns
+    -------
+    dict
+        ``freq``, ``signal``, ``clean_signal``, ``ground_truth``.
+    """
+    rng = np.random.default_rng(seed)
+    freq = np.asarray(freq_array, dtype=float)
+    amplitude = contrast * baseline
+
+    splitting = GAMMA_NV * abs(b_field)
+    if splitting < linewidth * 0.1:
+        # Essentially zero field → single dip at D0
+        clean = odmr_single_dip_model(freq, baseline, D0, amplitude, linewidth)
+        gt = {
+            "b_field": b_field, "n_dips": 1, "center": D0,
+            "amplitude": amplitude, "linewidth": linewidth,
+            "baseline": baseline,
+        }
+    else:
+        f_minus = D0 - splitting
+        f_plus = D0 + splitting
+        a_minus = amplitude * (1.0 + asymmetry / 2.0)
+        a_plus = amplitude * (1.0 - asymmetry / 2.0)
+        clean = odmr_model(freq, baseline, f_minus, f_plus,
+                           a_minus, a_plus, linewidth, linewidth)
+        gt = {
+            "b_field": b_field, "n_dips": 2,
+            "f_minus": f_minus, "f_plus": f_plus,
+            "a_minus": a_minus, "a_plus": a_plus,
+            "linewidth": linewidth, "baseline": baseline,
+            "splitting": 2 * splitting,
+        }
+
+    noise_std = baseline / snr if snr > 0 else 0.0
+    signal = clean + rng.normal(0, noise_std, size=len(freq))
+
+    return {
+        "freq": freq,
+        "signal": signal,
+        "clean_signal": clean,
+        "ground_truth": gt,
     }
 
 
@@ -401,6 +477,17 @@ def generate_full_experiment(
                 tau_arr, 16, noise_func, snr,
                 seed=None if seed is None else seed + i,
             )
+            fit_data_list.append(fd)
+
+    elif protocol == "cw_odmr":
+        tau_arr = np.linspace(D0 - 100e6, D0 + 100e6, n_tau)
+        for i in range(n_nds):
+            b_mean = float(np.mean(np.abs(field_ts[i])))
+            fd = generate_odmr_spectrum(
+                tau_arr, b_mean, snr=snr,
+                seed=None if seed is None else seed + i,
+            )
+            # Rename 'freq'→keep for ground_truth but signal comes from 'signal'
             fit_data_list.append(fd)
 
     else:

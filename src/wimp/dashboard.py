@@ -129,7 +129,7 @@ class WIMPDashboard:
 
         protocol = pn.widgets.Select(
             name="Protocol",
-            options=["ramsey", "echo", "t1", "dd"],
+            options=["ramsey", "echo", "t1", "dd", "cw_odmr"],
             value=self.config.protocol,
         )
         lambda_reg = pn.widgets.FloatInput(
@@ -339,8 +339,12 @@ class WIMPDashboard:
                 sig = np.asarray(ds.signal)
                 tau = np.asarray(ds.tau_array)
                 if sig.size > 0 and tau.size > 0:
-                    from wimp.viz import plot_ramsey_fringe
-                    fig = plot_ramsey_fringe(tau, sig[0] if sig.ndim > 1 else sig)
+                    if ds.protocol == "cw_odmr":
+                        from wimp.viz import plot_odmr_spectrum
+                        fig = plot_odmr_spectrum(tau, sig[0] if sig.ndim > 1 else sig)
+                    else:
+                        from wimp.viz import plot_ramsey_fringe
+                        fig = plot_ramsey_fringe(tau, sig[0] if sig.ndim > 1 else sig)
                     if fig is not None:
                         plot_pane.object = fig
 

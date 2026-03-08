@@ -145,6 +145,79 @@ def plot_t1_recovery(
     return fig
 
 
+def plot_odmr_spectrum(
+    freq: NDArray,
+    signal: NDArray,
+    fit_result: dict | None = None,
+    *,
+    ax: plt.Axes | None = None,
+    freq_units: str = "GHz",
+) -> Figure | None:
+    """Plot a CW ODMR spectrum with optional fit overlay.
+
+    Parameters
+    ----------
+    freq : ndarray
+        Frequency sweep values (Hz).
+    signal : ndarray
+        ODMR signal (a.u.).
+    fit_result : dict | None
+        Output of :func:`wimp.relaxation.fit_odmr`.
+    ax : Axes | None
+        Existing axes to draw on.
+    freq_units : str
+        ``"GHz"`` or ``"MHz"`` for the x-axis.
+    """
+    fig, ax = _get_ax(ax)
+    f = np.asarray(freq)
+    scale = 1e-9 if freq_units == "GHz" else 1e-6
+    label_unit = freq_units
+
+    ax.plot(f * scale, signal, "o", ms=2, alpha=0.6, label="Data")
+
+    if fit_result is not None:
+        n_dips = fit_result.get("n_dips", 1)
+        f_fit = np.linspace(f.min(), f.max(), 1000)
+
+        if n_dips == 2:
+            from wimp.relaxation import odmr_model
+            s_fit = odmr_model(
+                f_fit,
+                fit_result["baseline"],
+                fit_result["f_minus"],
+                fit_result["f_plus"],
+                fit_result["a_minus"],
+                fit_result["a_plus"],
+                fit_result["gamma_minus"],
+                fit_result["gamma_plus"],
+            )
+            ax.plot(f_fit * scale, s_fit, "-", lw=1.5, label="Fit")
+            # Mark dip positions
+            ax.axvline(fit_result["f_minus"] * scale, ls="--", lw=0.7, color="gray", alpha=0.7)
+            ax.axvline(fit_result["f_plus"] * scale, ls="--", lw=0.7, color="gray", alpha=0.7)
+        else:
+            from wimp.relaxation import odmr_single_dip_model
+            s_fit = odmr_single_dip_model(
+                f_fit,
+                fit_result["baseline"],
+                fit_result["center"],
+                fit_result["amplitude"],
+                fit_result["linewidth"],
+            )
+            ax.plot(f_fit * scale, s_fit, "-", lw=1.5, label="Fit")
+            ax.axvline(fit_result["center"] * scale, ls="--", lw=0.7, color="gray", alpha=0.7)
+
+        b_ut = fit_result.get("b_field", 0) * 1e6  # to uT
+        ax.set_title(f"CW ODMR  |  B = {b_ut:.2f} uT")
+
+    ax.set_xlabel(f"Frequency ({label_unit})")
+    ax.set_ylabel("Signal (a.u.)")
+    ax.legend(fontsize=8)
+    if fig is not None:
+        fig.tight_layout()
+    return fig
+
+
 # ---------------------------------------------------------------------------
 # Filter functions
 # ---------------------------------------------------------------------------

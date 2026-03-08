@@ -130,6 +130,10 @@ def denoise_butterworth(
     from scipy.signal import butter, sosfiltfilt
 
     signal = np.asarray(signal, dtype=float)
+    if fs <= 0:
+        raise ValueError(f"fs must be positive, got {fs}")
+    if cutoff <= 0:
+        raise ValueError(f"cutoff must be positive, got {cutoff}")
     nyq = fs / 2.0
     if cutoff >= nyq:
         return signal.copy()

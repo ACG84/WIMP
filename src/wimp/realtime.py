@@ -18,7 +18,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from wimp.io import WIMPDataset
-from wimp.relaxation import fit_ramsey, fit_t2_decay, fit_t1_recovery
+from wimp.relaxation import fit_ramsey, fit_t2_decay, fit_t1_recovery, fit_odmr
 
 
 # ---------------------------------------------------------------------------
@@ -420,6 +420,8 @@ class RealtimeProcessor:
             return fit_t2_decay(tau, signal, **kw)
         if protocol == "t1":
             return fit_t1_recovery(tau, signal, **kw)
+        if protocol == "cw_odmr":
+            return fit_odmr(tau, signal, **kw)
         # Fallback: return raw data
         return {"tau": tau, "signal": signal}
 

@@ -15,7 +15,7 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.optimize import curve_fit
 
-from wimp.constants import GAMMA_NV
+from wimp.constants import GAMMA_NV, D0
 
 # ---------------------------------------------------------------------------
 # Model functions
@@ -89,12 +89,84 @@ def biexponential_decay(
 
 
 # ---------------------------------------------------------------------------
+# CW ODMR models
+# ---------------------------------------------------------------------------
+
+
+def lorentzian_dip(
+    freq: NDArray,
+    center: float,
+    amplitude: float,
+    linewidth: float,
+) -> NDArray:
+    r"""Single Lorentzian absorption dip.
+
+    .. math::
+        L(f) = -A \frac{\Gamma^2}{(f - f_0)^2 + \Gamma^2}
+
+    Parameters
+    ----------
+    freq : ndarray
+        Microwave frequencies (Hz).
+    center : float
+        Resonance frequency *f₀* (Hz).
+    amplitude : float
+        Peak depth (positive value; returned as a negative dip).
+    linewidth : float
+        Half-width at half-maximum *Γ* (Hz).
+    """
+    return -amplitude * linewidth**2 / ((freq - center)**2 + linewidth**2)
+
+
+def odmr_model(
+    freq: NDArray,
+    baseline: float,
+    f_minus: float,
+    f_plus: float,
+    a_minus: float,
+    a_plus: float,
+    gamma_minus: float,
+    gamma_plus: float,
+) -> NDArray:
+    r"""Double-Lorentzian ODMR spectrum.
+
+    .. math::
+        S(f) = B + L(f; f^-, A^-, \Gamma^-) + L(f; f^+, A^+, \Gamma^+)
+
+    The two dips correspond to the :math:`m_s = \pm 1` transitions at
+    :math:`f^\pm = D_0 \pm \gamma_{\rm NV} B`.
+    """
+    return (
+        baseline
+        + lorentzian_dip(freq, f_minus, a_minus, gamma_minus)
+        + lorentzian_dip(freq, f_plus, a_plus, gamma_plus)
+    )
+
+
+def odmr_single_dip_model(
+    freq: NDArray,
+    baseline: float,
+    center: float,
+    amplitude: float,
+    linewidth: float,
+) -> NDArray:
+    r"""Single-dip ODMR spectrum (zero / low-field case).
+
+    .. math::
+        S(f) = B + L(f; f_0, A, \Gamma)
+    """
+    return baseline + lorentzian_dip(freq, center, amplitude, linewidth)
+
+
+# ---------------------------------------------------------------------------
 # Fitting helpers
 # ---------------------------------------------------------------------------
 
 
 def _initial_frequency_guess(tau: NDArray, signal: NDArray) -> float:
     """Estimate dominant oscillation frequency via FFT."""
+    if len(tau) < 2:
+        return 1e6  # fallback for single-element or empty arrays
     dt = np.median(np.diff(tau))
     if dt <= 0:
         return 1e6  # fallback
@@ -366,6 +438,200 @@ def fit_biexponential(
     return fitted
 
 
+def fit_odmr(
+    freq: NDArray,
+    signal: NDArray,
+    *,
+    n_dips: int | None = None,
+    p0: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    """Fit a CW ODMR spectrum and extract the DC magnetic field.
+
+    Parameters
+    ----------
+    freq : ndarray
+        Microwave frequency sweep (Hz).
+    signal : ndarray
+        Measured PL signal (a.u.).
+    n_dips : int | None
+        Number of dips to fit: ``1`` (single) or ``2`` (double).
+        If *None*, auto-detect from the spectrum.
+    p0 : dict, optional
+        Initial guesses keyed by parameter name.
+
+    Returns
+    -------
+    result : dict
+        Fitted parameters, ``b_field`` (T), ``contrast``,
+        ``t2star_estimated`` (s), ``n_dips``, covariance, and
+        goodness-of-fit metrics.
+    """
+    from scipy.signal import find_peaks
+
+    freq = np.asarray(freq, dtype=float)
+    signal = np.asarray(signal, dtype=float)
+
+    # --- Auto-detect number of dips ---
+    if n_dips is None:
+        # Smooth with a simple moving-average kernel
+        kernel_size = max(3, len(signal) // 50)
+        if kernel_size % 2 == 0:
+            kernel_size += 1
+        kernel = np.ones(kernel_size) / kernel_size
+        smoothed = np.convolve(signal, kernel, mode="same")
+
+        neg_signal = -smoothed
+        peaks, props = find_peaks(neg_signal, prominence=0)
+        if len(peaks) >= 2:
+            # Sort by prominence (deepest first)
+            order = np.argsort(props["prominences"])[::-1]
+            top2 = peaks[order[:2]]
+            top2_sorted = np.sort(top2)
+            sep = abs(freq[top2_sorted[1]] - freq[top2_sorted[0]])
+            depth_ratio = props["prominences"][order[1]] / props["prominences"][order[0]]
+            if sep > 5e6 and depth_ratio > 0.3:
+                n_dips = 2
+            else:
+                n_dips = 1
+        else:
+            n_dips = 1
+
+    baseline_est = float(np.max(signal))
+
+    if n_dips == 2:
+        return _fit_odmr_double(freq, signal, baseline_est, p0)
+    return _fit_odmr_single(freq, signal, baseline_est, p0)
+
+
+def _fit_odmr_single(
+    freq: NDArray,
+    signal: NDArray,
+    baseline_est: float,
+    p0: dict[str, float] | None,
+) -> dict[str, Any]:
+    """Fit a single-dip ODMR spectrum."""
+    min_idx = int(np.argmin(signal))
+    center_est = float(freq[min_idx])
+    amp_est = float(baseline_est - signal[min_idx])
+    lw_est = 5e6  # 5 MHz default
+
+    defaults = {
+        "baseline": baseline_est,
+        "center": center_est,
+        "amplitude": max(amp_est, 1e-6),
+        "linewidth": lw_est,
+    }
+    if p0:
+        defaults.update(p0)
+
+    freq_lo = float(min(freq[0], freq[-1]))
+    freq_hi = float(max(freq[0], freq[-1]))
+
+    guess = [defaults["baseline"], defaults["center"],
+             defaults["amplitude"], defaults["linewidth"]]
+    lower = [min(0, defaults["baseline"] - abs(defaults["baseline"]) * 0.5),
+             freq_lo, 0, 1e3]
+    upper = [np.inf, freq_hi, np.inf, 100e6]
+
+    popt, pcov = curve_fit(
+        odmr_single_dip_model, freq, signal, p0=guess,
+        bounds=(lower, upper), maxfev=20000,
+    )
+    names = ["baseline", "center", "amplitude", "linewidth"]
+    fitted = dict(zip(names, popt))
+
+    model_vals = odmr_single_dip_model(freq, *popt)
+    gof = goodness_of_fit(signal, model_vals, len(popt))
+
+    fitted["n_dips"] = 1
+    fitted["b_field"] = abs(fitted["center"] - D0) / GAMMA_NV
+    fitted["contrast"] = fitted["amplitude"] / fitted["baseline"] if fitted["baseline"] > 0 else 0.0
+    fitted["t2star_estimated"] = 1.0 / (np.pi * fitted["linewidth"])
+    fitted["cov"] = pcov
+    fitted.update(gof)
+    return fitted
+
+
+def _fit_odmr_double(
+    freq: NDArray,
+    signal: NDArray,
+    baseline_est: float,
+    p0: dict[str, float] | None,
+) -> dict[str, Any]:
+    """Fit a double-dip ODMR spectrum."""
+    from scipy.signal import find_peaks
+
+    # Smooth before peak-finding to avoid noise peaks
+    kernel_size = max(3, len(signal) // 50)
+    if kernel_size % 2 == 0:
+        kernel_size += 1
+    kernel = np.ones(kernel_size) / kernel_size
+    smoothed = np.convolve(signal, kernel, mode="same")
+
+    neg_signal = -smoothed
+    peaks, props = find_peaks(neg_signal, prominence=0)
+    if len(peaks) >= 2:
+        order = np.argsort(props["prominences"])[::-1]
+        top2 = np.sort(peaks[order[:2]])
+        f_minus_est = float(freq[top2[0]])
+        f_plus_est = float(freq[top2[1]])
+        a_minus_est = float(baseline_est - signal[top2[0]])
+        a_plus_est = float(baseline_est - signal[top2[1]])
+    else:
+        # Fallback: symmetric dips around D0
+        f_minus_est = D0 - 14e6
+        f_plus_est = D0 + 14e6
+        a_minus_est = float(baseline_est - np.min(signal))
+        a_plus_est = a_minus_est
+
+    lw_est = 5e6
+
+    defaults = {
+        "baseline": baseline_est,
+        "f_minus": f_minus_est,
+        "f_plus": f_plus_est,
+        "a_minus": max(a_minus_est, 1e-6),
+        "a_plus": max(a_plus_est, 1e-6),
+        "gamma_minus": lw_est,
+        "gamma_plus": lw_est,
+    }
+    if p0:
+        defaults.update(p0)
+
+    freq_lo = float(min(freq[0], freq[-1]))
+    freq_hi = float(max(freq[0], freq[-1]))
+
+    guess = [defaults["baseline"], defaults["f_minus"], defaults["f_plus"],
+             defaults["a_minus"], defaults["a_plus"],
+             defaults["gamma_minus"], defaults["gamma_plus"]]
+    lower = [min(0, defaults["baseline"] - abs(defaults["baseline"]) * 0.5),
+             freq_lo, freq_lo, 0, 0, 1e3, 1e3]
+    upper = [np.inf, freq_hi, freq_hi, np.inf, np.inf, 100e6, 100e6]
+
+    popt, pcov = curve_fit(
+        odmr_model, freq, signal, p0=guess,
+        bounds=(lower, upper), maxfev=20000,
+    )
+    names = ["baseline", "f_minus", "f_plus", "a_minus", "a_plus",
+             "gamma_minus", "gamma_plus"]
+    fitted = dict(zip(names, popt))
+
+    model_vals = odmr_model(freq, *popt)
+    gof = goodness_of_fit(signal, model_vals, len(popt))
+
+    fitted["n_dips"] = 2
+    fitted["splitting"] = abs(fitted["f_plus"] - fitted["f_minus"])
+    fitted["b_field"] = fitted["splitting"] / (2.0 * GAMMA_NV)
+    fitted["center_freq"] = (fitted["f_plus"] + fitted["f_minus"]) / 2.0
+    avg_linewidth = (fitted["gamma_minus"] + fitted["gamma_plus"]) / 2.0
+    avg_amplitude = (fitted["a_minus"] + fitted["a_plus"]) / 2.0
+    fitted["contrast"] = avg_amplitude / fitted["baseline"] if fitted["baseline"] > 0 else 0.0
+    fitted["t2star_estimated"] = 1.0 / (np.pi * avg_linewidth)
+    fitted["cov"] = pcov
+    fitted.update(gof)
+    return fitted
+
+
 # ---------------------------------------------------------------------------
 # Field extraction utilities
 # ---------------------------------------------------------------------------
@@ -395,6 +661,17 @@ def extract_field_echo(phase: float, tau: float) -> float:
     # φ = 2π γ B_AC × (2τ / π)  for a sine-wave field at f=1/(2τ)
     # Simplified: B = φ / (2π γ 2τ /π) = φ π / (4π γ τ) = φ/(4 γ τ)
     return abs(phase) / (4.0 * GAMMA_NV * tau)
+
+
+def extract_field_odmr(fit_result: dict[str, Any]) -> float:
+    """Return the DC magnetic field (Tesla) from an ODMR fit result.
+
+    For a double-dip fit, uses the splitting.  For a single-dip fit,
+    uses the offset of the dip centre from *D₀*.
+    """
+    if fit_result.get("n_dips", 1) == 2:
+        return fit_result["splitting"] / (2.0 * GAMMA_NV)
+    return abs(fit_result["center"] - D0) / GAMMA_NV
 
 
 # ---------------------------------------------------------------------------

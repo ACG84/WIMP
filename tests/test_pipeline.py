@@ -343,3 +343,36 @@ class TestPipelineDenoising:
         config = PipelineConfig()
         assert config.denoise_method is None
         assert config.denoise_params == {}
+
+
+class TestCWODMRPipeline:
+    def test_cw_odmr_in_valid_protocols(self):
+        config = PipelineConfig(protocol="cw_odmr")
+        validate_config(config)  # should not raise
+
+    def test_cw_odmr_default_config(self):
+        config = default_config("cw_odmr")
+        assert config.protocol == "cw_odmr"
+
+    def test_run_pipeline_cw_odmr(self):
+        from wimp.synthetic import generate_odmr_spectrum
+        from wimp.constants import D0, GAMMA_NV
+
+        b = 1e-3
+        freq = np.linspace(2.78e9, 2.96e9, 500)
+        data = generate_odmr_spectrum(freq, b, snr=100, seed=42)
+
+        ds = WIMPDataset(
+            protocol="cw_odmr",
+            tau_array=freq,
+            signal=data["signal"],
+        )
+        config = PipelineConfig(
+            protocol="cw_odmr",
+            tau_range=(2.78e9, 2.96e9),
+            source_localization=False,
+        )
+        results = run_pipeline(config, dataset=ds)
+        assert len(results["fits"]) == 1
+        assert results["field_timeseries"] is not None
+

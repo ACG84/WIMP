@@ -123,6 +123,40 @@ def t1_sensitivity(
     return 1.0 / (snr_per_shot * math.sqrt(t1))
 
 
+def cw_sensitivity(
+    contrast: float,
+    linewidth: float,
+    readout_rate: float,
+    n_nv: int = 1,
+) -> float:
+    r"""CW ODMR magnetic-field sensitivity.
+
+    .. math::
+        \eta_{\rm CW} = \frac{4}{3\sqrt{3}}
+                         \frac{\Delta f}{C \, \gamma_{\rm NV}
+                         \sqrt{R \, N_{\rm NV}}}
+
+    Parameters
+    ----------
+    contrast : float
+        ODMR dip contrast (0, 1].
+    linewidth : float
+        ODMR linewidth (Hz, full width at half maximum).
+    readout_rate : float
+        Photon detection rate *R* (counts / second).
+    n_nv : int
+        Number of NV centres contributing.
+
+    Returns
+    -------
+    eta : float
+        Sensitivity in T / √Hz (lower is better).
+    """
+    return (4.0 / (3.0 * math.sqrt(3.0))) * linewidth / (
+        contrast * GAMMA_NV * math.sqrt(readout_rate * n_nv)
+    )
+
+
 def shot_noise_limit(
     n_photons: float,
     contrast: float,
@@ -155,6 +189,7 @@ def compare_protocols(
     t2: float = 100e-6,
     t1: float = 5e-3,
     readout_rate: float = 1e5,
+    linewidth: float = 5e6,
     n_nv: int = 1,
     dd_pulses: int = 64,
 ) -> pd.DataFrame:
@@ -186,6 +221,12 @@ def compare_protocols(
             "sensitivity_T_sqrtHz": float("nan"),  # not directly a B-field sensitivity
             "coherence_time_s": t1,
             "notes": f"dT1/T1={t1_sensitivity(contrast, t1, readout_rate, n_nv):.2e} /sqrtHz",
+        },
+        {
+            "protocol": "CW ODMR",
+            "sensitivity_T_sqrtHz": cw_sensitivity(contrast, linewidth, readout_rate, n_nv),
+            "coherence_time_s": float("nan"),
+            "notes": f"linewidth={linewidth*1e-6:.1f} MHz",
         },
     ]
     return pd.DataFrame(rows)
@@ -245,6 +286,11 @@ def optimal_protocol(
         return {"protocol": "t1_relaxometry",
                 "sensitivity_dT1_frac_sqrtHz": delta,
                 "optimal_tau_s": t1}
+
+    if target.lower() == "cw_odmr":
+        eta = cw_sensitivity(contrast, 5e6, readout_rate, n_nv)
+        return {"protocol": "cw_odmr", "sensitivity_T_sqrtHz": eta,
+                "optimal_tau_s": float("nan")}
 
     raise ValueError(f"Unknown target: {target!r}")
 
@@ -422,6 +468,12 @@ def sensitivity_vs_tau(
         decay_penalty = np.exp(tau / t1)
         sens = sens * decay_penalty
 
+    elif protocol == "cw_odmr":
+        raise ValueError(
+            "CW ODMR sensitivity does not depend on tau. "
+            "Use cw_sensitivity() instead."
+        )
+
     else:
         raise ValueError(f"Unknown protocol: {protocol!r}")
 
@@ -466,6 +518,8 @@ def measurement_time_for_target(
         eta_0 = ac_sensitivity(contrast, t2, readout_rate, n_pulses, n_nv)
     elif protocol == "t1":
         eta_0 = t1_sensitivity(contrast, t1, readout_rate, n_nv)
+    elif protocol == "cw_odmr":
+        eta_0 = cw_sensitivity(contrast, 5e6, readout_rate, n_nv)
     else:
         raise ValueError(f"Unknown protocol: {protocol!r}")
 

@@ -11,6 +11,7 @@ from wimp.viz import (
     plot_ramsey_fringe,
     plot_decay_curve,
     plot_t1_recovery,
+    plot_odmr_spectrum,
     plot_filter_function,
     plot_noise_spectrum,
     plot_field_timeseries,
@@ -410,3 +411,36 @@ class TestPlotCircuitDiagram:
         activity = np.ones(n) * 0.5
         fig = plot_circuit_diagram("thermotaxis", activity=activity)
         assert isinstance(fig, Figure)
+
+
+class TestPlotODMRSpectrum:
+    def test_returns_figure(self):
+        from wimp.constants import D0
+        freq = np.linspace(2.86e9, 2.88e9, 200)
+        signal = np.ones_like(freq) - 0.03 * (5e6)**2 / ((freq - D0)**2 + (5e6)**2)
+        fig = plot_odmr_spectrum(freq, signal)
+        assert isinstance(fig, Figure)
+
+    def test_with_fit_result(self):
+        from wimp.constants import D0, GAMMA_NV
+        from wimp.relaxation import fit_odmr
+        b = 1e-3
+        f_minus = D0 - GAMMA_NV * b
+        f_plus = D0 + GAMMA_NV * b
+        freq = np.linspace(2.78e9, 2.96e9, 500)
+        from wimp.relaxation import odmr_model
+        signal = odmr_model(freq, 1.0, f_minus, f_plus, 0.03, 0.03, 5e6, 5e6)
+        rng = np.random.default_rng(44)
+        signal += rng.normal(0, 0.001, signal.shape)
+        fit = fit_odmr(freq, signal)
+        fig = plot_odmr_spectrum(freq, signal, fit)
+        assert isinstance(fig, Figure)
+
+    def test_with_existing_ax(self):
+        from wimp.constants import D0
+        freq = np.linspace(2.86e9, 2.88e9, 200)
+        signal = np.ones_like(freq) - 0.03 * (5e6)**2 / ((freq - D0)**2 + (5e6)**2)
+        _, ax = plt.subplots()
+        result = plot_odmr_spectrum(freq, signal, ax=ax)
+        assert result is None  # returns None when ax is provided
+
